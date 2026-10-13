@@ -22,5 +22,10 @@ cli -s .video0.codec h264
 fw_setenv wlandev ssw101b-ssc333-tapo-c110
 #fw_setenv wlanssid Router
 #fw_setenv wlanpass 12345678
+#
+# Ensure 8 MB SPI NOR partition layout with persistent rootfs_data overlay
+#
+fw_setenv rootmtd 5120k
+fw_setenv bootargs 'console=ttyS0,115200 panic=20 root=/dev/mtdblock3 init=/init mtdparts=NOR_FLASH:256k(boot),64k(env),2048k(kernel),5120k(rootfs),-(rootfs_data) LX_MEM=${memlx} mma_heap=mma_heap_name0,miu=0,sz=${memsz} cma=2M'
 
 exit 0

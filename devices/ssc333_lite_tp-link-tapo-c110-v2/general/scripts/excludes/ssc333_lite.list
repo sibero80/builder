@@ -37,3 +37,4 @@
 /usr/sbin/tune.exfat
 /etc/sensors/jxq03.bin
 /lib/modules/4.9.84/sigmastar/sensor_os03b10_mipi.ko
+/usr/share/openipc/sounds/ready_48k.pcm
