@@ -36,4 +36,9 @@
 /usr/sbin/exfatlabel
 /usr/sbin/tune.exfat
 /etc/sensors/jxq03.bin
+/etc/sensors/sc3336.bin
+/etc/sensors/sc401ai.bin
 /lib/modules/4.9.84/sigmastar/sensor_os03b10_mipi.ko
+/lib/modules/4.9.84/sigmastar/sensor_sc3336_mipi.ko
+/lib/modules/4.9.84/sigmastar/sensor_sc401ai_mipi.ko
+/usr/share/openipc/sounds/ready_48k.pcm
