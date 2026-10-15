@@ -1,0 +1,85 @@
+From 215bbf51d3cb3f8281d9deee2aa64c3d15788c42 Mon Sep 17 00:00:00 2001
+From: sibero80 <sibero80@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 22:43:02 +0000
+Subject: [PATCH] fix(build): replace bare export with explicit variables for
+ GNU Make 4.4+ compatibility
+
+GNU Make 4.4+ exports all variables to child processes when bare 'export' is used.
+This causes Kbuild in the Linux kernel (scripts/Makefile.lib) to fail with:
+'scripts/Makefile.lib:402: *** prerequisites cannot be defined in recipes. Stop.'
+
+Replacing bare export with an explicit export of required driver variables
+resolves the issue and allows compilation on Ubuntu 24.04+, Debian 13+, and modern distros.
+---
+ Makefile              | 12 +++++++-----
+ Makefile.build.kernel |  4 ++--
+ 2 files changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index eef8cd2..eeebb97 100644
+--- a/Makefile
++++ b/Makefile
+@@ -7,7 +7,7 @@ NOSTDINC_FLAGS := -I$(src)/include/ \
+ 	-DCOMPAT_STATIC
+ 
+ #####################################################
+-export
++# export
+ MODULES_NAME = ssw101b_wifi_usb
+ CONFIG_FPGA = n
+ CONFIG_1601 = n
+@@ -53,19 +53,19 @@ SDIO_BUS = y
+ endif
+ 
+ #####################################################
+-export 
++# export
+ ifeq ($(CONFIG_SSTAR_APOLLO),)
+ CONFIG_SSTAR_APOLLO = m
+ endif
+ 
+-export
++# export
+ include $(src)/Makefile.build.kernel
+ 
+-export
++# export
+ SSTAR_WIFI__EXT_CCFLAGS = -DSSTAR_WIFI_PLATFORM=18
+ 
+ #####################################################
+-export
++# export
+ ifeq ($(CONFIG_MAC80211_SSTAR_RC_MINSTREL),)
+ SSTAR_WIFI__EXT_CCFLAGS += -DCONFIG_MAC80211_SSTAR_RC_MINSTREL=1
+ CONFIG_MAC80211_SSTAR_RC_MINSTREL = y
+@@ -96,3 +96,5 @@ strip:
+ 
+ clean:
+ 	make -C $(KDIR) M=$(PWD) ARCH=$(ARCH) clean
++
++export MODULES_NAME CONFIG_FPGA CONFIG_1601 CONFIG_1606 CONFIG_APOLLOC CONFIG_APOLLOD CONFIG_APOLLOE CONFIG_ATHENAA CONFIG_ATHENAB CONFIG_ATHENAB_24M CONFIG_ATHENAC CONFIG_ATHENALITE CONFIG_ATHENALITE_ECO CONFIG_ARES CONFIG_ARESB CONFIG_HERA USB_BUS SPI_BUS SDIO_BUS TX_NO_CONFIRM MULT_NAME SSTAR_MAKEFILE_SUB LOAD_FW_H SKB_DEBUG MEM_DEBUG BRIDGE MONITOR EARLYSUSPEND CH5G USBAGGTX NOTXCONFIRM USBDMABUFF USBCMDENHANCE USBDATAENHANCE PMRELODDFW CHECKSUM CONFIG_NOT_SUPPORT_40M_CHW CONFIG_SSTAR_APOLLO SSTAR_WIFI__EXT_CCFLAGS CONFIG_MAC80211_SSTAR_RC_MINSTREL CONFIG_MAC80211_SSTAR_RC_MINSTREL_HT HIF
+diff --git a/Makefile.build.kernel b/Makefile.build.kernel
+index 6ae0ddf..60b8aa8 100644
+--- a/Makefile.build.kernel
++++ b/Makefile.build.kernel
+@@ -9,7 +9,7 @@ NOSTDINC_FLAGS := -I$(src)/include/ \
+ KBUILD_CFLAGS += -Wno-address
+ 
+ ifneq ($(SSTAR_MAKEFILE_SUB),y)
+-export
++# export
+ 
+ ifeq ($(CONFIG_SSTAR_MODULE_NAME),)
+ CONFIG_SSTAR_MODULE_NAME = Sstar_wifi
+@@ -27,7 +27,7 @@ ifeq ($(CONFIG_SSTAR_FW_NAME),)
+ CONFIG_SSTAR_FW_NAME="fw.bin"
+ endif
+ 
+-export
++# export
+ SDIO_HOST      ?= $(shell echo $(CONFIG_SSTAR_SDIO_MMCx))
+ IF1NAME        ?= $(shell echo $(CONFIG_SSTAR_WIFIIF1_NAME))
+ IF2NAME        ?= $(shell echo $(CONFIG_SSTAR_WIFIIF2_NAME))
+-- 
+2.47.3
+
