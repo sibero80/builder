@@ -172,7 +172,6 @@ focus_label="Focus"
 <% fi %>
 <script src="/a/af-state.js"></script>
 <script src="/a/ptz-speed.js"></script>
-<script src="/a/ptz-stick.js"></script>
 <script src="/a/ptz-orient.js"></script>
 <script src="/a/ptz-centre.js"></script>
 <script src="/a/ptz-follow.js"></script>

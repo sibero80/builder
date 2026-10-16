@@ -3,6 +3,16 @@
  */
 (function() {
   function initPresets() {
+  // Safety shim: ensure MajesticPtzOrient never rejects due to missing image.rotate in majestic.yaml
+  if (window.MajesticPtzOrient) {
+    const origOf = window.MajesticPtzOrient.of;
+    window.MajesticPtzOrient.of = function(t) {
+      if (t && typeof t === 'object' && t.rotate === undefined) {
+        t.rotate = 0;
+      }
+      return origOf(t);
+    };
+  }
     const ptzBox = document.getElementById('mj-ptz');
     if (!ptzBox) {
       setTimeout(initPresets, 200);
