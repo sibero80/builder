@@ -7,6 +7,9 @@ VERTICAL=""
 ACTION=""
 PRESET=""
 NAME=""
+PAN=""
+TILT=""
+CRUISE=""
 for param in $(echo "$QUERY_STRING" | tr '&' ' '); do
 	case "$param" in
 		h=*) HORIZONTAL="${param#*=}" ;;
@@ -14,6 +17,9 @@ for param in $(echo "$QUERY_STRING" | tr '&' ' '); do
 		act=*) ACTION="${param#*=}" ;;
 		preset=*) PRESET="${param#*=}" ;;
 		name=*) NAME="${param#*=}" ;;
+		pan=*) PAN="${param#*=}" ;;
+		tilt=*) TILT="${param#*=}" ;;
+		cruise=*) CRUISE="${param#*=}" ;;
 	esac
 done
 
@@ -83,6 +89,9 @@ fi
 # Sanitize preset and name parameters
 PRESET=$(echo "$PRESET" | tr -cd 'a-zA-Z0-9_-')
 NAME=$(echo "$NAME" | tr -cd 'a-zA-Z0-9_-')
+PAN=$(echo "$PAN" | tr -cd '0-9-')
+TILT=$(echo "$TILT" | tr -cd '0-9-')
+CRUISE=$(echo "$CRUISE" | tr -cd '0-9')
 
 # Handle extended PTZ actions via /usr/sbin/ptz-controller
 if [ -x /usr/sbin/ptz-controller ]; then
@@ -112,6 +121,24 @@ Cache-Control: no-store
 
 "
 			/usr/sbin/ptz-controller goto "${PRESET:-1}"
+			exit $?
+			;;
+		step)
+			echo "HTTP/1.1 200 OK
+Content-type: application/json; charset=UTF-8
+Cache-Control: no-store
+
+"
+			/usr/sbin/ptz-controller step "${PAN:-$HORIZONTAL}" "${TILT:-$VERTICAL}" "${CRUISE:-2500}"
+			exit $?
+			;;
+		abs)
+			echo "HTTP/1.1 200 OK
+Content-type: application/json; charset=UTF-8
+Cache-Control: no-store
+
+"
+			/usr/sbin/ptz-controller abs "${PAN:--1}" "${TILT:--1}" "${CRUISE:-2500}"
 			exit $?
 			;;
 		set)

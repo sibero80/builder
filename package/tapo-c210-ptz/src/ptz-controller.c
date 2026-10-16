@@ -837,14 +837,19 @@ int main(int argc, char **argv) {
         int d_tilt = atoi(argv[3]);
         int cruise = (argc >= 5) ? atoi(argv[4]) : T_CRUISE_US;
         stop_active_motion(&ctx);
-        return execute_ramped_move(&ctx, d_pan, d_tilt, cruise, 1, 0);
+        int rc = execute_ramped_move(&ctx, d_pan, d_tilt, cruise, 1, 0);
+        printf("{\"status\":\"ok\",\"action\":\"step\",\"pan_pos\":%d,\"tilt_pos\":%d}\n", ctx.pan_pos, ctx.tilt_pos);
+        return rc;
     }
     if (strcmp(cmd, "abs") == 0) {
         if (argc < 4) return 1;
-        int target_pan = atoi(argv[2]);
-        int target_tilt = atoi(argv[3]);
+        int target_pan = (strcmp(argv[2], "c") == 0 || strcmp(argv[2], "-1") == 0) ? ctx.pan_pos : atoi(argv[2]);
+        int target_tilt = (strcmp(argv[3], "c") == 0 || strcmp(argv[3], "-1") == 0) ? ctx.tilt_pos : atoi(argv[3]);
+        int cruise = (argc >= 5) ? atoi(argv[4]) : T_CRUISE_US;
         stop_active_motion(&ctx);
-        return execute_ramped_move(&ctx, target_pan - ctx.pan_pos, target_tilt - ctx.tilt_pos, T_CRUISE_US, 1, 0);
+        int rc = execute_ramped_move(&ctx, target_pan - ctx.pan_pos, target_tilt - ctx.tilt_pos, cruise, 1, 0);
+        printf("{\"status\":\"ok\",\"action\":\"abs\",\"pan_pos\":%d,\"tilt_pos\":%d}\n", ctx.pan_pos, ctx.tilt_pos);
+        return rc;
     }
     if (strcmp(cmd, "move") == 0) {
         if (argc < 3) return 1;
