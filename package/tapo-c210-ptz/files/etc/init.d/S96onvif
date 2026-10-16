@@ -9,7 +9,7 @@ PIDFILE="/var/run/onvif_simple_server.pid"
 
 start() {
 	printf "Initializing PTZ state and starting ONVIF PTZ service: "
-	/usr/sbin/ptz-controller boot >/dev/null 2>&1 &
+	/usr/sbin/ptz-controller boot >/dev/null 2>&1
 	start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON" -- -c "$CONF" -n
 	[ $? = 0 ] && echo "OK" || echo "FAIL"
 }
