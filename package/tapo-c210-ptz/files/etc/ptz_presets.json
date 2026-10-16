@@ -1,0 +1,12 @@
+{
+  "homed": true,
+  "pan_pos": 1000,
+  "tilt_pos": 200,
+  "pan_span": 2000,
+  "tilt_span": 400,
+  "presets": {
+    "1": {"name": "home",   "pan": 1000, "tilt": 200},
+    "2": {"name": "door",   "pan": 1450, "tilt": 180},
+    "3": {"name": "window", "pan": 420,  "tilt": 260}
+  }
+}

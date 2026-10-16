@@ -16,6 +16,7 @@ cli -s .nightMode.backlightPin 14
 cli -s .nightMode.colorToGray true
 cli -s .audio.speakerPin 61
 cli -s .video0.codec h264
+cli -s .ptz.enabled true
 #
 #
 # Set PTZ motor settings
