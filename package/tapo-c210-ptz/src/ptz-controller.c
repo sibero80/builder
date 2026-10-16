@@ -406,6 +406,7 @@ static void gpio_set_phase(const int fds[4], int phase) {
     const int *seq = PHASE_SEQ[phase & 7];
     for (int i = 0; i < 4; i++) {
         if (fds[i] >= 0) {
+            (void)lseek(fds[i], 0, SEEK_SET);
             (void)write(fds[i], seq[i] ? "1" : "0", 1);
         }
     }
@@ -414,6 +415,7 @@ static void gpio_set_phase(const int fds[4], int phase) {
 static void gpio_deenergize_and_close(int fds[4]) {
     for (int i = 0; i < 4; i++) {
         if (fds[i] >= 0) {
+            (void)lseek(fds[i], 0, SEEK_SET);
             (void)write(fds[i], "0", 1);
             close(fds[i]);
             fds[i] = -1;
@@ -545,7 +547,8 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
     gpio_deenergize_and_close(pan_fds);
     gpio_deenergize_and_close(tilt_fds);
 
-    if (clamp_bounds && ctx->calibrated) {
+    /* Always guarantee coordinates are bounded within [0, span] */
+    if (ctx->calibrated) {
         if (ctx->pan_pos < 0) ctx->pan_pos = 0;
         if (ctx->pan_pos > ctx->pan_span) ctx->pan_pos = ctx->pan_span;
         if (ctx->tilt_pos < 0) ctx->tilt_pos = 0;
@@ -561,28 +564,33 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
 
 static int cmd_calibrate(ptz_ctx_t *ctx) {
     stop_active_motion(ctx);
+    ctx->calibrated = 0;
+    save_state(ctx);
 
     /* Phase 1: Soft-homing sweep to negative mechanical stops (-Pan, -Tilt) */
     int sweep_pan = -(ctx->pan_span + (ctx->pan_span * 8) / 100);   /* -2160 half-steps */
     int sweep_tilt = -(ctx->tilt_span + (ctx->tilt_span * 10) / 100); /* -440 half-steps */
     execute_ramped_move(ctx, sweep_pan, sweep_tilt, T_CRUISE_US, 0, 1);
 
-    /* Brief settle at mechanical zero origin */
-    sleep_us(150000);
+    /* At mechanical stop origin, reset coordinates to (0, 0) */
     ctx->pan_pos = 0;
     ctx->tilt_pos = 0;
     ctx->calibrated = 1;
+    save_state(ctx);
+    sleep_us(150000);
 
     /* Determine home target (Preset 1 if defined, otherwise center (1000, 200)) */
     int home_pan = ctx->pan_span / 2;
     int home_tilt = ctx->tilt_span / 2;
-    if (ctx->presets[0].used) {
+    if (ctx->presets[0].used && ctx->presets[0].pan >= 0 && ctx->presets[0].tilt >= 0) {
         home_pan = ctx->presets[0].pan;
         home_tilt = ctx->presets[0].tilt;
     }
 
     /* Phase 2: Smooth trapezoidal move from (0, 0) to Home/Center */
     execute_ramped_move(ctx, home_pan, home_tilt, T_CRUISE_US, 1, 0);
+    ctx->pan_pos = home_pan;
+    ctx->tilt_pos = home_tilt;
     ctx->calibrated = 1;
     save_state(ctx);
     save_presets_json(ctx);
