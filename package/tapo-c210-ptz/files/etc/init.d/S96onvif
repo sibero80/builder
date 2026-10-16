@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# Start PTZ coordinate state restoration and ONVIF PTZ service
+#
+
+DAEMON="/usr/sbin/onvif_simple_server"
+CONF="/etc/onvif_simple_server.conf"
+PIDFILE="/var/run/onvif_simple_server.pid"
+
+start() {
+	printf "Initializing PTZ state and starting ONVIF PTZ service: "
+	/usr/sbin/ptz-controller boot >/dev/null 2>&1 &
+	start-stop-daemon -S -q -b -m -p "$PIDFILE" -x "$DAEMON" -- -c "$CONF" -n
+	[ $? = 0 ] && echo "OK" || echo "FAIL"
+}
+
+stop() {
+	printf "Stopping ONVIF PTZ service: "
+	/usr/sbin/ptz-controller stop >/dev/null 2>&1
+	start-stop-daemon -K -q -p "$PIDFILE"
+	rm -f "$PIDFILE"
+	echo "OK"
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart|reload)
+		stop
+		sleep 1
+		start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit 0

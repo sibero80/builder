@@ -1,0 +1,22 @@
+config BR2_PACKAGE_TAPO_C210_PTZ
+	bool "tapo-c210-ptz"
+	depends on BR2_arm
+	select BR2_PACKAGE_MAJESTIC_WEBUI_PTZ if BR2_PACKAGE_MAJESTIC_WEBUI
+	help
+	  Board support for the TP-Link Tapo C210 v2 / C220 PTZ camera
+	  (SigmaStar SSC333 + SmartSens SC3338 + 4-phase stepper motors).
+
+	  Installs:
+	  - /usr/sbin/ptz-controller: C motion engine implementing a quadratic
+	    trapezoidal velocity profile (T_start=12ms, T_cruise=2.5ms, N_ramp=32),
+	    soft-touch homing calibration, persistent coordinate & phase state
+	    (/tmp/ptz_state & /etc/ptz_presets.json), and named/numbered presets.
+	  - /usr/bin/gpio-motors: Symlink to /usr/sbin/ptz-controller providing
+	    drop-in compatibility for legacy gpio-motors invocations.
+	  - /usr/lib/majestic-af.so: Majestic PTZ plugin shim enabling Port-80
+	    ONVIF PTZ and extending /onvif/ptz_service with GetPresets, GotoPreset,
+	    SetPreset, RemovePreset, GotoHomePosition, RelativeMove, AbsoluteMove.
+	  - /usr/sbin/onvif_simple_server: Standalone ONVIF Profile S/T PTZ SOAP
+	    service configured via /etc/onvif_simple_server.conf and started by
+	    /etc/init.d/S96onvif.
+	  - /var/www/cgi-bin/j/ptz.cgi: Extended WebUI/REST PTZ CGI handler.
