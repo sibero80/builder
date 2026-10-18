@@ -567,10 +567,26 @@ static int cmd_calibrate(ptz_ctx_t *ctx) {
     ctx->calibrated = 0;
     save_state(ctx);
 
-    /* Phase 1: Soft-homing sweep to negative mechanical stops (-Pan, -Tilt) */
-    int sweep_pan = -(ctx->pan_span + (ctx->pan_span * 8) / 100);   /* -2160 half-steps */
+    /*
+     * Sequential Homing to Prevent Brownouts:
+     * Never energize both stepper motors simultaneously during calibration.
+     * Simultaneous dual-motor stall draws ~800mA DC, which combined with
+     * Wi-Fi TX burst and system load can cause 5V rail voltage sag and SoC brownout.
+     *
+     * Phase 1A: Soft-homing sweep Tilt to negative mechanical stop alone.
+     */
     int sweep_tilt = -(ctx->tilt_span + (ctx->tilt_span * 10) / 100); /* -440 half-steps */
-    execute_ramped_move(ctx, sweep_pan, sweep_tilt, T_CRUISE_US, 0, 1);
+    execute_ramped_move(ctx, 0, sweep_tilt, T_CRUISE_US, 0, 1);
+    if (g_stop_requested) return 1;
+    sleep_us(100000);
+    if (g_stop_requested) return 1;
+
+    /* Phase 1B: Soft-homing sweep Pan to negative mechanical stop alone. */
+    int sweep_pan = -(ctx->pan_span + (ctx->pan_span * 8) / 100);   /* -2160 half-steps */
+    execute_ramped_move(ctx, sweep_pan, 0, T_CRUISE_US, 0, 1);
+    if (g_stop_requested) return 1;
+    sleep_us(100000);
+    if (g_stop_requested) return 1;
 
     /* At mechanical stop origin, reset coordinates to (0, 0) */
     ctx->pan_pos = 0;
@@ -578,6 +594,7 @@ static int cmd_calibrate(ptz_ctx_t *ctx) {
     ctx->calibrated = 1;
     save_state(ctx);
     sleep_us(150000);
+    if (g_stop_requested) return 1;
 
     /* Determine home target (Preset 1 if defined, otherwise center (1000, 200)) */
     int home_pan = ctx->pan_span / 2;
@@ -587,8 +604,15 @@ static int cmd_calibrate(ptz_ctx_t *ctx) {
         home_tilt = ctx->presets[0].tilt;
     }
 
-    /* Phase 2: Smooth trapezoidal move from (0, 0) to Home/Center */
-    execute_ramped_move(ctx, home_pan, home_tilt, T_CRUISE_US, 1, 0);
+    /* Phase 2: Sequential smooth move from (0, 0) to Home/Center */
+    execute_ramped_move(ctx, home_pan, 0, T_CRUISE_US, 1, 0);
+    if (g_stop_requested) return 1;
+    sleep_us(100000);
+    if (g_stop_requested) return 1;
+
+    execute_ramped_move(ctx, 0, home_tilt, T_CRUISE_US, 1, 0);
+    if (g_stop_requested) return 1;
+
     ctx->pan_pos = home_pan;
     ctx->tilt_pos = home_tilt;
     ctx->calibrated = 1;
