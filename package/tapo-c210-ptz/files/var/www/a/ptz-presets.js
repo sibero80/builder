@@ -4,11 +4,11 @@
 (function() {
   // Speed definitions: index 1..5 -> { step: half-steps, cruise: us, label: name }
   const SPEED_CONFIG = {
-    1: { step: 20, cruise: 4500, label: '1x (Fine)' },
-    2: { step: 40, cruise: 3500, label: '2x (Normal)' },
-    3: { step: 60, cruise: 2500, label: '3x (Brisk)' },
-    4: { step: 90, cruise: 2000, label: '4x (Fast)' },
-    5: { step: 140, cruise: 1600, label: '5x (Max)' }
+    1: { step: 40, cruise: 4500, label: '1x (Fine)' },
+    2: { step: 80, cruise: 3500, label: '2x (Normal)' },
+    3: { step: 130, cruise: 2500, label: '3x (Brisk)' },
+    4: { step: 200, cruise: 2000, label: '4x (Fast)' },
+    5: { step: 300, cruise: 1600, label: '5x (Max)' }
   };
 
   let currentSpeed = 3;
@@ -99,11 +99,11 @@
       <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; margin-top: 1px;">
         <div style="font-size: 9px; font-weight: 600; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 2px;">Pan Angle</div>
         <div style="display: flex; justify-content: space-between; gap: 2px;">
-          <button type="button" class="mj-pan-angle-btn" data-pan="0" title="Pan to 0° (Left Stop)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">0°</button>
-          <button type="button" class="mj-pan-angle-btn" data-pan="250" title="Pan to 45°" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">45°</button>
-          <button type="button" class="mj-pan-angle-btn" data-pan="500" title="Pan to 90°" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">90°</button>
-          <button type="button" class="mj-pan-angle-btn" data-pan="1000" title="Pan to 180° (Center)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">180°</button>
-          <button type="button" class="mj-pan-angle-btn" data-pan="1500" title="Pan to 270°" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">270°</button>
+          <button type="button" class="mj-pan-angle-btn" data-deg="0" data-pan="0" title="Pan to 0° (Left Stop)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">0°</button>
+          <button type="button" class="mj-pan-angle-btn" data-deg="45" data-pan="488" title="Pan to 45°" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">45°</button>
+          <button type="button" class="mj-pan-angle-btn" data-deg="90" data-pan="975" title="Pan to 90°" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">90°</button>
+          <button type="button" class="mj-pan-angle-btn" data-deg="180" data-pan="1950" title="Pan to 180° (Center)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">180°</button>
+          <button type="button" class="mj-pan-angle-btn" data-deg="270" data-pan="2925" title="Pan to 270°" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">270°</button>
         </div>
       </div>
 
@@ -111,9 +111,9 @@
       <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; margin-top: 1px;">
         <div style="font-size: 9px; font-weight: 600; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 2px;">Tilt Angle</div>
         <div style="display: flex; justify-content: space-between; gap: 2px;">
-          <button type="button" class="mj-tilt-angle-btn" data-tilt="400" title="Tilt Top (Up)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▲ Top</button>
-          <button type="button" class="mj-tilt-angle-btn" data-tilt="200" title="Tilt Middle (Level)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▬ Mid</button>
-          <button type="button" class="mj-tilt-angle-btn" data-tilt="0" title="Tilt Bottom (Down)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▼ Bot</button>
+          <button type="button" class="mj-tilt-angle-btn" data-type="top" data-tilt="1350" title="Tilt Top (Up)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▲ Top</button>
+          <button type="button" class="mj-tilt-angle-btn" data-type="mid" data-tilt="675" title="Tilt Middle (Level)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▬ Mid</button>
+          <button type="button" class="mj-tilt-angle-btn" data-type="bot" data-tilt="0" title="Tilt Bottom (Down)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▼ Bot</button>
         </div>
       </div>
 
@@ -322,6 +322,19 @@
             dot.style.background = isHomed ? '#22c55e' : '#f59e0b';
             dot.title = isHomed ? `Homed (pan: ${data.pan_pos}, tilt: ${data.tilt_pos})` : 'Uncalibrated (click Calib to home)';
           }
+
+          const pSpan = data.pan_span || 3900;
+          const tSpan = data.tilt_span || 1350;
+          dock.querySelectorAll('.mj-pan-angle-btn').forEach(btn => {
+            const deg = btn.dataset.deg;
+            if (deg !== undefined) {
+              btn.dataset.pan = Math.round(pSpan * parseInt(deg, 10) / 360);
+            }
+          });
+          const topBtn = dock.querySelector('.mj-tilt-angle-btn[data-type="top"]');
+          if (topBtn) topBtn.dataset.tilt = tSpan;
+          const midBtn = dock.querySelector('.mj-tilt-angle-btn[data-type="mid"]');
+          if (midBtn) midBtn.dataset.tilt = Math.round(tSpan / 2);
 
           const sel = document.getElementById('mj-preset-sel');
           if (!sel) return;

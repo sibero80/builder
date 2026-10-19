@@ -38,10 +38,10 @@
 #endif
 
 /* Tapo C210 v2 Hardware Travel & Timing Constants (in half-steps) */
-#define DEFAULT_PAN_SPAN   2000   /* 250 8-phase cycles = ~360 deg */
-#define DEFAULT_TILT_SPAN  400    /* 50  8-phase cycles = ~114 deg */
-#define DEFAULT_PAN_HOME   1000
-#define DEFAULT_TILT_HOME  200
+#define DEFAULT_PAN_SPAN   3900   /* ~343 deg travel */
+#define DEFAULT_TILT_SPAN  1350   /* ~114 deg travel */
+#define DEFAULT_PAN_HOME   1950   /* Center */
+#define DEFAULT_TILT_HOME  675    /* Level horizon */
 
 #define T_START_US         12000  /* 12.0 ms (~83 steps/s) high-torque silent start */
 #define T_CRUISE_US        2500   /*  2.5 ms (400 steps/s) ~5.0s full 360 sweep */
@@ -141,24 +141,24 @@ static void init_default_ctx(ptz_ctx_t *ctx) {
     ctx->tilt_pins[2] = 76;
     ctx->tilt_pins[3] = 77;
 
-    /* Default presets matching motor_calibration_plan.md */
+    /* Default presets matching full hardware physical range */
     ctx->presets[0].id = 1;
     ctx->presets[0].used = 1;
     strcpy(ctx->presets[0].name, "home");
-    ctx->presets[0].pan = 1000;
-    ctx->presets[0].tilt = 200;
+    ctx->presets[0].pan = DEFAULT_PAN_HOME;
+    ctx->presets[0].tilt = DEFAULT_TILT_HOME;
 
     ctx->presets[1].id = 2;
     ctx->presets[1].used = 1;
     strcpy(ctx->presets[1].name, "door");
-    ctx->presets[1].pan = 1450;
-    ctx->presets[1].tilt = 180;
+    ctx->presets[1].pan = 2800;
+    ctx->presets[1].tilt = 600;
 
     ctx->presets[2].id = 3;
     ctx->presets[2].used = 1;
     strcpy(ctx->presets[2].name, "window");
-    ctx->presets[2].pan = 420;
-    ctx->presets[2].tilt = 260;
+    ctx->presets[2].pan = 800;
+    ctx->presets[2].tilt = 850;
 }
 
 static void load_gpio_pins_from_env(ptz_ctx_t *ctx) {
@@ -574,15 +574,19 @@ static int cmd_calibrate(ptz_ctx_t *ctx) {
      * Wi-Fi TX burst and system load can cause 5V rail voltage sag and SoC brownout.
      *
      * Phase 1A: Soft-homing sweep Tilt to negative mechanical stop alone.
+     * Sweeping 1500 half-steps guarantees reaching the bottom stop from any elevation.
      */
-    int sweep_tilt = -(ctx->tilt_span + (ctx->tilt_span * 10) / 100); /* -440 half-steps */
+    int sweep_tilt = -(ctx->tilt_span + 150); /* -1500 half-steps */
     execute_ramped_move(ctx, 0, sweep_tilt, T_CRUISE_US, 0, 1);
     if (g_stop_requested) return 1;
     sleep_us(100000);
     if (g_stop_requested) return 1;
 
-    /* Phase 1B: Soft-homing sweep Pan to negative mechanical stop alone. */
-    int sweep_pan = -(ctx->pan_span + (ctx->pan_span * 8) / 100);   /* -2160 half-steps */
+    /*
+     * Phase 1B: Soft-homing sweep Pan to negative mechanical stop alone.
+     * Sweeping 4200 half-steps guarantees reaching the left stop from any pan angle.
+     */
+    int sweep_pan = -(ctx->pan_span + 300);   /* -4200 half-steps */
     execute_ramped_move(ctx, sweep_pan, 0, T_CRUISE_US, 0, 1);
     if (g_stop_requested) return 1;
     sleep_us(100000);
