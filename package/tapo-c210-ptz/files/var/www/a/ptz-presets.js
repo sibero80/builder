@@ -111,8 +111,8 @@
       <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 3px; margin-top: 1px;">
         <div style="font-size: 9px; font-weight: 600; text-transform: uppercase; color: rgba(255,255,255,0.5); margin-bottom: 2px;">Tilt Angle</div>
         <div style="display: flex; justify-content: space-between; gap: 2px;">
-          <button type="button" class="mj-tilt-angle-btn" data-type="top" data-tilt="1050" title="Tilt Top (Up)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▲ Top</button>
-          <button type="button" class="mj-tilt-angle-btn" data-type="mid" data-tilt="525" title="Tilt Middle (Level)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▬ Mid</button>
+          <button type="button" class="mj-tilt-angle-btn" data-type="top" data-tilt="2048" title="Tilt Top (Up)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▲ Top</button>
+          <button type="button" class="mj-tilt-angle-btn" data-type="mid" data-tilt="1024" title="Tilt Middle (Level)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▬ Mid</button>
           <button type="button" class="mj-tilt-angle-btn" data-type="bot" data-tilt="0" title="Tilt Bottom (Down)" style="flex: 1; font-size: 10px; padding: 2px 0; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 2px; color: #d1d5db; cursor: pointer;">▼ Bot</button>
         </div>
       </div>
@@ -324,7 +324,7 @@
           }
 
           const pSpan = data.pan_span || 3900;
-          const tSpan = data.tilt_span || 1050;
+          const tSpan = data.tilt_span || 2048;
           dock.querySelectorAll('.mj-pan-angle-btn').forEach(btn => {
             const deg = btn.dataset.deg;
             if (deg !== undefined) {
