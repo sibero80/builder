@@ -30,6 +30,7 @@ static void print_usage(const char *prog)
 	printf("OpenIPC In-Kernel Motor Controller\n");
 	printf("Usage:\n");
 	printf("  %s move <pan_half_steps> <tilt_half_steps> [delay_us] [low_torque:0|1]\n", prog);
+	printf("  %s stop\n", prog);
 	printf("  %s status\n", prog);
 	printf("  %s setpos <pan_pos> <tilt_pos>\n", prog);
 	printf("  %s calibrate [tilt_span] [pan_span]\n", prog);
@@ -57,9 +58,17 @@ int main(int argc, char **argv)
 			close(fd);
 			return 1;
 		}
-		printf("{\"pan_pos\":%d,\"tilt_pos\":%d,\"energised\":%d,\"last_pan_dir\":%d,\"last_tilt_dir\":%d,\"pan_backlash_hits\":%d,\"tilt_backlash_hits\":%d}\n",
-		       st.pan_pos, st.tilt_pos, st.energised, st.last_pan_dir, st.last_tilt_dir,
+		printf("{\"pan_pos\":%d,\"tilt_pos\":%d,\"moving\":%d,\"energised\":%d,\"last_pan_dir\":%d,\"last_tilt_dir\":%d,\"pan_backlash_hits\":%d,\"tilt_backlash_hits\":%d}\n",
+		       st.pan_pos, st.tilt_pos, st.moving, st.energised,
+		       st.last_pan_dir, st.last_tilt_dir,
 		       st.pan_backlash_hits, st.tilt_backlash_hits);
+	} else if (strcmp(argv[1], "stop") == 0) {
+		if (ioctl(fd, OPENIPC_MOTOR_IOC_STOP) < 0) {
+			perror("ioctl STOP");
+			close(fd);
+			return 1;
+		}
+		printf("{\"status\":\"ok\",\"action\":\"stop\"}\n");
 	} else if (strcmp(argv[1], "move") == 0) {
 		struct openipc_motor_move m;
 		if (argc < 4) {
@@ -110,7 +119,7 @@ int main(int argc, char **argv)
 			cfg.tilt_backlash = atoi(argv[3]);
 			cfg.hold_ms = atoi(argv[4]);
 			cfg.ramp_start_us = 8000;
-			cfg.ramp_steps = 48;
+			cfg.ramp_steps = 94;
 			if (ioctl(fd, OPENIPC_MOTOR_IOC_SET_CONFIG, &cfg) < 0) {
 				perror("ioctl SET_CONFIG");
 				close(fd);
@@ -125,14 +134,14 @@ int main(int argc, char **argv)
 		printf("{\"pan_backlash\":%d,\"tilt_backlash\":%d,\"ramp_start_us\":%d,\"ramp_steps\":%d,\"hold_ms\":%d}\n",
 		       cfg.pan_backlash, cfg.tilt_backlash, cfg.ramp_start_us, cfg.ramp_steps, cfg.hold_ms);
 	} else if (strcmp(argv[1], "calibrate") == 0) {
-		int tilt_span = (argc >= 3) ? atoi(argv[2]) : 2048;
-		int pan_span  = (argc >= 4) ? atoi(argv[3]) : 3900;
+		int tilt_span = (argc >= 3) ? atoi(argv[2]) : OPENIPC_MOTOR_DEFAULT_TILT_MAX;
+		int pan_span  = (argc >= 4) ? atoi(argv[3]) : OPENIPC_MOTOR_DEFAULT_PAN_MAX;
 		struct openipc_motor_move m;
 		struct openipc_motor_set_pos sp;
 
 		/* Phase 1: Soft-homing Tilt alone to bottom hard stop with low_torque=1 */
 		memset(&m, 0, sizeof(m));
-		m.tilt_steps = -(tilt_span + 250);
+		m.tilt_steps = -(tilt_span + 350);
 		m.delay_us = 4000;
 		m.low_torque = 1;
 		if (ioctl(fd, OPENIPC_MOTOR_IOC_MOVE, &m) < 0) {
@@ -140,16 +149,11 @@ int main(int argc, char **argv)
 			close(fd);
 			return 1;
 		}
-
-		/* Reset tilt coordinate to 0 */
-		sp.pan_pos = 0;
-		sp.tilt_pos = 0;
-		ioctl(fd, OPENIPC_MOTOR_IOC_SET_POS, &sp);
 		usleep(100000);
 
 		/* Phase 2: Soft-homing Pan alone to left hard stop with low_torque=1 */
 		memset(&m, 0, sizeof(m));
-		m.pan_steps = -(pan_span + 250);
+		m.pan_steps = -(pan_span + 300);
 		m.delay_us = 3500;
 		m.low_torque = 1;
 		if (ioctl(fd, OPENIPC_MOTOR_IOC_MOVE, &m) < 0) {
@@ -158,11 +162,11 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		/* Reset coordinates to (0, 0) */
+		/* Reset origin coordinates to (0, 0) now that both axes are at negative stops */
 		sp.pan_pos = 0;
 		sp.tilt_pos = 0;
 		ioctl(fd, OPENIPC_MOTOR_IOC_SET_POS, &sp);
-		usleep(100000);
+		usleep(150000);
 
 		/* Phase 3: Move smoothly to Level Horizon Center (Pan: span/2, Tilt: span/2) */
 		memset(&m, 0, sizeof(m));
