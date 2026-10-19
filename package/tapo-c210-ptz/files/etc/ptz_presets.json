@@ -1,12 +1,12 @@
 {
   "homed": true,
   "pan_pos": 1950,
-  "tilt_pos": 675,
+  "tilt_pos": 525,
   "pan_span": 3900,
-  "tilt_span": 1350,
+  "tilt_span": 1050,
   "presets": {
-    "1": {"name": "home",   "pan": 1950, "tilt": 675},
-    "2": {"name": "door",   "pan": 2800, "tilt": 600},
-    "3": {"name": "window", "pan": 800,  "tilt": 850}
+    "1": {"name": "home",   "pan": 1950, "tilt": 525},
+    "2": {"name": "door",   "pan": 2800, "tilt": 450},
+    "3": {"name": "window", "pan": 800,  "tilt": 650}
   }
 }
