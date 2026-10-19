@@ -1,0 +1,51 @@
+#!/bin/sh
+# /etc/init.d/S95openipc-motor - OpenIPC in-kernel PTZ motor driver loader
+
+DAEMON="openipc-motor"
+
+start() {
+	echo -n "Starting ${DAEMON}: "
+	# Tapo C210 v2 / C220 default GPIOs on SigmaStar SSC333
+	# Pan: 44, 45, 46, 47; Tilt: 80, 79, 76, 77
+	if [ -f /lib/modules/$(uname -r)/extra/openipc-motor.ko ]; then
+		insmod /lib/modules/$(uname -r)/extra/openipc-motor.ko \
+			pan_gpios=44,45,46,47 \
+			tilt_gpios=80,79,76,77 \
+			pan_backlash=16 \
+			tilt_backlash=24 \
+			hold_ms=20
+		[ $? -eq 0 ] && echo "OK" || echo "FAIL"
+	else
+		echo "not found"
+	fi
+}
+
+stop() {
+	echo -n "Stopping ${DAEMON}: "
+	openipc-motor-ctl off 2>/dev/null
+	rmmod openipc-motor 2>/dev/null
+	[ $? -eq 0 ] && echo "OK" || echo "FAIL"
+}
+
+restart() {
+	stop
+	start
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart|reload)
+		restart
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+		;;
+esac
+
+exit $?

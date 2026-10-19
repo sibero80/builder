@@ -1,0 +1,12 @@
+config BR2_PACKAGE_OPENIPC_MOTOR
+	bool "openipc-motor"
+	depends on BR2_LINUX_KERNEL
+	help
+	  In-kernel GPIO half-step PTZ stepper driver with automatic
+	  backlash compensation, cycle-exact pulse timing, coil thermal
+	  protection, and soft-stall homing.
+
+	  https://openipc.org
+
+comment "openipc-motor needs a Linux kernel to be built"
+	depends on !BR2_LINUX_KERNEL
