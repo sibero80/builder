@@ -1,11 +1,13 @@
 /*
- * ptz-controller.c — Unified PTZ Motion, Trapezoidal Speed Ramping & Preset Engine
+ * ptz-controller.c — Unified PTZ Motion, 94-Step S-Curve Ramping & Preset Engine
  * Target: TP-Link Tapo C210 v2 / C220 (SigmaStar SSC333) on OpenIPC
  *
  * Features:
- *  - Quadratic/trapezoidal acceleration & deceleration velocity profile
- *    (T_start = 12000 us, T_cruise = 2500 us, N_ramp = 32 half-steps)
- *  - Soft-touch homing calibration (T_soft_stop = 8000 us touchdown)
+ *  - Automatic delegation to /dev/openipc-motor kernel hrtimer driver when loaded
+ *  - Real-time SCHED_FIFO user-space fallback with 94-entry S-curve ramp & backlash slack
+ *  - Bounded slack-hysteresis backlash compensation (Pan: 16, Tilt: 24 half-steps)
+ *  - Sequential single-axis stepping to prevent 5V rail voltage sag
+ *  - Soft-touch homing calibration (8000 us final 15% touchdown)
  *  - Persistent phase & coordinate tracking (/tmp/ptz_state & /etc/ptz_presets.json)
  *  - Silent boot coordinate restoration (no noisy calibration sweep if already homed)
  *  - Named & numbered presets for ONVIF (Frigate) and HTTP/WebUI
@@ -16,11 +18,13 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -37,18 +41,64 @@
 #define PRESETS_TMP_FILE "/etc/ptz_presets.json.tmp"
 #endif
 
+#define KERNEL_MOTOR_DEV "/dev/openipc-motor"
+
+/* Kernel driver ioctl ABI (matches openipc-motor.h) */
+struct openipc_motor_move {
+    int pan_steps;
+    int tilt_steps;
+    int delay_us;
+    int low_torque;
+};
+
+struct openipc_motor_status {
+    int pan_pos;
+    int tilt_pos;
+    int moving;
+    int energised;
+    int last_pan_dir;
+    int last_tilt_dir;
+    int pan_backlash_hits;
+    int tilt_backlash_hits;
+};
+
+struct openipc_motor_set_pos {
+    int pan_pos;
+    int tilt_pos;
+};
+
+#define OPENIPC_MOTOR_IOC_MAGIC       'M'
+#define OPENIPC_MOTOR_IOC_MOVE        _IOW(OPENIPC_MOTOR_IOC_MAGIC, 1, struct openipc_motor_move)
+#define OPENIPC_MOTOR_IOC_GET_STATUS  _IOR(OPENIPC_MOTOR_IOC_MAGIC, 2, struct openipc_motor_status)
+#define OPENIPC_MOTOR_IOC_SET_POS     _IOW(OPENIPC_MOTOR_IOC_MAGIC, 5, struct openipc_motor_set_pos)
+#define OPENIPC_MOTOR_IOC_COILS_OFF   _IO(OPENIPC_MOTOR_IOC_MAGIC,  6)
+#define OPENIPC_MOTOR_IOC_STOP        _IO(OPENIPC_MOTOR_IOC_MAGIC,  7)
+
 /* Tapo C210 v2 Hardware Travel & Timing Constants (in half-steps) */
 #define DEFAULT_PAN_SPAN   3900   /* ~343 deg travel */
 #define DEFAULT_TILT_SPAN  2048   /* ~114 deg travel (physical desk to ceiling limits matching stock Tapo) */
 #define DEFAULT_PAN_HOME   1950   /* Center */
 #define DEFAULT_TILT_HOME  1024   /* Level horizon */
 
-#define T_START_US         12000  /* 12.0 ms (~83 steps/s) high-torque silent start */
-#define T_CRUISE_US        2500   /*  2.5 ms (400 steps/s) ~5.0s full 360 sweep */
-#define T_SOFT_STOP_US     8000   /*  8.0 ms low-torque soft mechanical touchdown */
-#define N_RAMP             32     /* 32 half-steps (4 full cycles) ramp zone */
+#define PAN_BACKLASH       16     /* 16 half-steps (~1.4 deg) pan gear slack */
+#define TILT_BACKLASH      24     /* 24 half-steps (~1.3 deg) tilt gear slack */
+
+#define T_START_US         8000   /* 8.0 ms (125 Hz) high-torque S-curve start */
+#define T_CRUISE_US        2500   /* 2.5 ms (400 Hz) smooth cruise */
+#define T_SOFT_STOP_US     8000   /* 8.0 ms low-torque soft mechanical touchdown */
+#define SCURVE_LEN         94     /* 94-step S-curve ramp matching stock motor_driver.ko */
 
 #define MAX_PRESETS        16
+
+/* 94-entry Sigmoid S-curve frequency percentage table (10% .. 99%) from stock motor_driver.ko */
+static const unsigned char STOCK_SCURVE_PCT[SCURVE_LEN] = {
+    10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 12, 12, 12, 12,
+    13, 13, 14, 14, 14, 15, 15, 16, 16, 17, 18, 19, 19, 20, 21, 22,
+    23, 24, 25, 26, 28, 29, 31, 32, 34, 36, 38, 40, 42, 44, 46, 48,
+    50, 53, 56, 59, 62, 65, 67, 69, 71, 73, 75, 77, 79, 81, 83, 85,
+    86, 87, 88, 89, 90, 90, 91, 92, 93, 93, 94, 94, 95, 95, 96, 96,
+    96, 97, 97, 97, 98, 98, 98, 98, 99, 99, 99, 99, 99, 99
+};
 
 typedef struct {
     int id;
@@ -67,13 +117,15 @@ typedef struct {
     int moving;
     int pan_phase;
     int tilt_phase;
+    int pan_slack;
+    int tilt_slack;
     int pid;
     int pan_pins[4];
     int tilt_pins[4];
     ptz_preset_t presets[MAX_PRESETS];
 } ptz_ctx_t;
 
-/* 8-phase half-step excitation sequence for 28BYJ-48 / 4-phase unipolar stepper */
+/* 8-phase half-step excitation sequence for 24BYJ-48 / 4-phase unipolar stepper */
 static const int PHASE_SEQ[8][4] = {
     {1, 0, 0, 0},
     {1, 1, 0, 0},
@@ -100,7 +152,7 @@ static void sleep_us(int us) {
     nanosleep(&ts, NULL);
 }
 
-/* Compute step delay (in microseconds) using quadratic trapezoidal velocity ramp */
+/* Compute step delay (in us) using the 94-entry S-curve table for accel and decel */
 static int compute_step_delay(int step_idx, int total_steps, int t_start, int t_cruise, int n_ramp) {
     if (total_steps <= 1 || n_ramp <= 0 || t_start <= t_cruise) {
         return t_cruise;
@@ -112,11 +164,12 @@ static int compute_step_delay(int step_idx, int total_steps, int t_start, int t_
     if (k >= n_ramp) {
         return t_cruise;
     }
-    /* T(k) = T_cruise + (T_start - T_cruise) * (1 - k / N_ramp)^2 */
-    int rem = n_ramp - k;
-    long num = (long)(t_start - t_cruise) * (long)rem * (long)rem;
-    long den = (long)n_ramp * (long)n_ramp;
-    return t_cruise + (int)(num / den);
+    int tbl_idx = (k * (SCURVE_LEN - 1)) / n_ramp;
+    int pct = (int)STOCK_SCURVE_PCT[tbl_idx];
+    int start_freq = 1000000 / t_start;
+    int cruise_freq = 1000000 / t_cruise;
+    int freq = start_freq + ((cruise_freq - start_freq) * (pct - 10)) / 90;
+    return (freq > 0) ? (1000000 / freq) : t_cruise;
 }
 
 static void init_default_ctx(ptz_ctx_t *ctx) {
@@ -129,6 +182,8 @@ static void init_default_ctx(ptz_ctx_t *ctx) {
     ctx->moving = 0;
     ctx->pan_phase = 0;
     ctx->tilt_phase = 0;
+    ctx->pan_slack = PAN_BACKLASH;
+    ctx->tilt_slack = TILT_BACKLASH;
     ctx->pid = 0;
 
     /* Default Tapo C210 v2 GPIOs: Pan 44 45 46 47, Tilt 80 79 76 77 */
@@ -319,6 +374,19 @@ static int save_presets_json(const ptz_ctx_t *ctx) {
     return 0;
 }
 
+static void sync_from_kernel_driver(ptz_ctx_t *ctx) {
+    int kfd = open(KERNEL_MOTOR_DEV, O_RDWR);
+    if (kfd >= 0) {
+        struct openipc_motor_status st;
+        if (ioctl(kfd, OPENIPC_MOTOR_IOC_GET_STATUS, &st) == 0) {
+            ctx->pan_pos = st.pan_pos;
+            ctx->tilt_pos = st.tilt_pos;
+            ctx->moving = st.moving;
+        }
+        close(kfd);
+    }
+}
+
 static int load_state(ptz_ctx_t *ctx) {
     init_default_ctx(ctx);
     load_presets_json(ctx);
@@ -338,6 +406,8 @@ static int load_state(ptz_ctx_t *ctx) {
         else if (sscanf(line, "moving=%d", &val) == 1) ctx->moving = val;
         else if (sscanf(line, "pan_phase=%d", &val) == 1) ctx->pan_phase = val & 7;
         else if (sscanf(line, "tilt_phase=%d", &val) == 1) ctx->tilt_phase = val & 7;
+        else if (sscanf(line, "pan_slack=%d", &val) == 1) ctx->pan_slack = val;
+        else if (sscanf(line, "tilt_slack=%d", &val) == 1) ctx->tilt_slack = val;
         else if (sscanf(line, "pid=%d", &val) == 1) ctx->pid = val;
         else if (strncmp(line, "pins=", 5) == 0) {
             int p[8];
@@ -356,6 +426,7 @@ static int load_state(ptz_ctx_t *ctx) {
     if (!got_pins) {
         load_gpio_pins_from_env(ctx);
     }
+    sync_from_kernel_driver(ctx);
     return 0;
 }
 
@@ -368,6 +439,8 @@ static int save_state(const ptz_ctx_t *ctx) {
     fprintf(f, "moving=%d\n", ctx->moving);
     fprintf(f, "pan_phase=%d\n", ctx->pan_phase & 7);
     fprintf(f, "tilt_phase=%d\n", ctx->tilt_phase & 7);
+    fprintf(f, "pan_slack=%d\n", ctx->pan_slack);
+    fprintf(f, "tilt_slack=%d\n", ctx->tilt_slack);
     fprintf(f, "pid=%d\n", ctx->pid);
     fprintf(f, "pins=%d %d %d %d %d %d %d %d\n",
             ctx->pan_pins[0], ctx->pan_pins[1], ctx->pan_pins[2], ctx->pan_pins[3],
@@ -376,7 +449,7 @@ static int save_state(const ptz_ctx_t *ctx) {
     return 0;
 }
 
-/* Sysfs GPIO helpers with persistent file descriptors during move */
+/* Sysfs GPIO helpers for user-space fallback mode */
 static int gpio_open_pins(const int pins[4], int fds[4]) {
     char path[64];
     for (int i = 0; i < 4; i++) {
@@ -423,14 +496,36 @@ static void gpio_deenergize_and_close(int fds[4]) {
     }
 }
 
-/* Stop any currently running ptz-controller motion process */
+/* Stop any currently running ptz-controller motion or kernel hrtimer move */
 static void stop_active_motion(ptz_ctx_t *ctx) {
+    int kfd = open(KERNEL_MOTOR_DEV, O_RDWR);
+    if (kfd >= 0) {
+        (void)ioctl(kfd, OPENIPC_MOTOR_IOC_STOP);
+        for (int i = 0; i < 30; i++) {
+            struct openipc_motor_status st;
+            if (ioctl(kfd, OPENIPC_MOTOR_IOC_GET_STATUS, &st) == 0 && !st.moving)
+                break;
+            sleep_us(5000);
+        }
+        close(kfd);
+    }
     if (ctx->pid > 0 && ctx->pid != (int)getpid()) {
-        if (kill(ctx->pid, SIGTERM) == 0) {
-            for (int i = 0; i < 30; i++) {
-                sleep_us(5000);
+        /* Wait up to 100ms for child process to exit naturally */
+        for (int i = 0; i < 20; i++) {
+            if (kill(ctx->pid, 0) != 0) break;
+            sleep_us(5000);
+        }
+        /* If still alive, signal SIGTERM */
+        if (kill(ctx->pid, 0) == 0) {
+            (void)kill(ctx->pid, SIGTERM);
+            for (int i = 0; i < 20; i++) {
                 if (kill(ctx->pid, 0) != 0) break;
+                sleep_us(5000);
             }
+        }
+        /* Final escalation to guarantee no orphaned process remains */
+        if (kill(ctx->pid, 0) == 0) {
+            (void)kill(ctx->pid, SIGKILL);
         }
     }
     /* Reload updated state after previous process exited */
@@ -441,9 +536,69 @@ static void stop_active_motion(ptz_ctx_t *ctx) {
 }
 
 /*
- * Execute a coordinated Pan/Tilt move with quadratic trapezoidal speed ramping.
- * If clamp_bounds is non-zero, clamps target coordinates to [0, pan_span] and [0, tilt_span].
- * If homing_mode is non-zero, uses T_SOFT_STOP_US for the final approach to mechanical stops.
+ * Single-axis user-space fallback runner with S-curve ramp and bounded slack backlash.
+ */
+static void run_userspace_axis(const int pins[4], int *phase, int *pos, int *slack,
+                               int steps, int backlash_max, int is_tilt,
+                               int t_start, int t_cruise, int homing_mode) {
+    if (steps == 0 || g_stop_requested) return;
+
+    int logical_dir = (steps > 0) ? 1 : -1;
+    int motor_dir = is_tilt ? -logical_dir : logical_dir;
+
+    if (*slack < 0) *slack = 0;
+    if (*slack > backlash_max) *slack = backlash_max;
+
+    int backlash_to_inject = 0;
+    if (!homing_mode && backlash_max > 0) {
+        backlash_to_inject = (logical_dir > 0) ? (backlash_max - *slack) : *slack;
+    }
+
+    int total_steps = abs(steps) + backlash_to_inject;
+    int soft_zone_start = (total_steps * 85) / 100;
+    int fds[4] = {-1, -1, -1, -1};
+    gpio_open_pins(pins, fds);
+
+    for (int i = 0; i < total_steps; i++) {
+        if (g_stop_requested) {
+            int rem = total_steps - i;
+            if (rem > 16) total_steps = i + 16;
+        }
+
+        *phase = (*phase + motor_dir + 8) & 7;
+        gpio_set_phase(fds, *phase);
+
+        if (!homing_mode && backlash_max > 0) {
+            if (logical_dir > 0) {
+                if (*slack < backlash_max) (*slack)++;
+                else (*pos)++;
+            } else {
+                if (*slack > 0) (*slack)--;
+                else (*pos)--;
+            }
+        } else {
+            *pos += logical_dir;
+            if (homing_mode) *slack = (logical_dir > 0) ? backlash_max : 0;
+        }
+
+        int delay_us = compute_step_delay(i, total_steps, t_start, t_cruise, SCURVE_LEN);
+        if (homing_mode && i >= soft_zone_start) {
+            int soft_len = total_steps - soft_zone_start;
+            int soft_idx = i - soft_zone_start;
+            int soft_delay = t_cruise + ((T_SOFT_STOP_US - t_cruise) * soft_idx) / (soft_len > 0 ? soft_len : 1);
+            if (soft_delay > delay_us) delay_us = soft_delay;
+        }
+        sleep_us(delay_us);
+    }
+
+    sleep_us(20000); /* 20ms rotor settling hold before coil release */
+    gpio_deenergize_and_close(fds);
+}
+
+/*
+ * Execute a Pan/Tilt move.
+ * Automatically delegates to /dev/openipc-motor when loaded; otherwise uses
+ * SCHED_FIFO user-space sequential S-curve stepping.
  */
 static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
                                int t_cruise, int clamp_bounds, int homing_mode) {
@@ -458,27 +613,11 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
         d_tilt = target_tilt - ctx->tilt_pos;
     }
 
-    int abs_pan = abs(d_pan);
-    int abs_tilt = abs(d_tilt);
-    int total_steps = (abs_pan > abs_tilt) ? abs_pan : abs_tilt;
-    if (total_steps <= 0) {
+    if (d_pan == 0 && d_tilt == 0) {
         return 0;
     }
 
     if (t_cruise < 1500) t_cruise = T_CRUISE_US;
-    int t_start = (t_cruise > T_START_US) ? t_cruise : T_START_US;
-
-    int pan_dir = (d_pan > 0) ? 1 : ((d_pan < 0) ? -1 : 0);
-    int tilt_dir = (d_tilt > 0) ? 1 : ((d_tilt < 0) ? -1 : 0);
-    /* Invert tilt motor stepping: forward phase (+1) tilts lens DOWN towards desk,
-     * reverse phase (-1) tilts lens UP towards ceiling. */
-    int tilt_motor_dir = -tilt_dir;
-
-    int pan_fds[4] = {-1, -1, -1, -1};
-    int tilt_fds[4] = {-1, -1, -1, -1};
-
-    if (abs_pan > 0) gpio_open_pins(ctx->pan_pins, pan_fds);
-    if (abs_tilt > 0) gpio_open_pins(ctx->tilt_pins, tilt_fds);
 
     g_stop_requested = 0;
     struct sigaction sa;
@@ -491,66 +630,48 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
     ctx->pid = (int)getpid();
     save_state(ctx);
 
-    /* Bresenham-style coordinated stepping across pan and tilt axes */
-    int pan_err = 0;
-    int tilt_err = 0;
-    int soft_zone_start = (total_steps * 85) / 100;
+    /* Path 1: Delegate to in-kernel /dev/openipc-motor hrtimer driver if loaded */
+    int kfd = open(KERNEL_MOTOR_DEV, O_RDWR);
+    if (kfd >= 0) {
+        struct openipc_motor_move m;
+        struct openipc_motor_status st;
+        memset(&m, 0, sizeof(m));
+        m.pan_steps = d_pan;
+        m.tilt_steps = d_tilt;
+        m.delay_us = t_cruise;
+        m.low_torque = homing_mode ? 1 : 0;
 
-    for (int i = 0; i < total_steps; i++) {
-        if (g_stop_requested) {
-            /* Smooth quick 8-step decel on stop signal */
-            for (int d = 0; d < 8 && i < total_steps; d++, i++) {
-                pan_err += abs_pan;
-                if (pan_err >= total_steps) {
-                    pan_err -= total_steps;
-                    ctx->pan_phase = (ctx->pan_phase + pan_dir + 8) & 7;
-                    gpio_set_phase(pan_fds, ctx->pan_phase);
-                    ctx->pan_pos += pan_dir;
-                }
-                tilt_err += abs_tilt;
-                if (tilt_err >= total_steps) {
-                    tilt_err -= total_steps;
-                    ctx->tilt_phase = (ctx->tilt_phase + tilt_motor_dir + 8) & 7;
-                    gpio_set_phase(tilt_fds, ctx->tilt_phase);
-                    ctx->tilt_pos += tilt_dir;
-                }
-                int stop_delay = t_cruise + ((T_SOFT_STOP_US - t_cruise) * (d + 1)) / 8;
-                sleep_us(stop_delay);
-            }
-            break;
+        (void)ioctl(kfd, OPENIPC_MOTOR_IOC_MOVE, &m);
+        if (ioctl(kfd, OPENIPC_MOTOR_IOC_GET_STATUS, &st) == 0) {
+            ctx->pan_pos = st.pan_pos;
+            ctx->tilt_pos = st.tilt_pos;
         }
+        close(kfd);
 
-        pan_err += abs_pan;
-        if (pan_err >= total_steps) {
-            pan_err -= total_steps;
-            ctx->pan_phase = (ctx->pan_phase + pan_dir + 8) & 7;
-            gpio_set_phase(pan_fds, ctx->pan_phase);
-            ctx->pan_pos += pan_dir;
-        }
-
-        tilt_err += abs_tilt;
-        if (tilt_err >= total_steps) {
-            tilt_err -= total_steps;
-            ctx->tilt_phase = (ctx->tilt_phase + tilt_motor_dir + 8) & 7;
-            gpio_set_phase(tilt_fds, ctx->tilt_phase);
-            ctx->tilt_pos += tilt_dir;
-        }
-
-        int delay_us = compute_step_delay(i, total_steps, t_start, t_cruise, N_RAMP);
-        if (homing_mode && i >= soft_zone_start) {
-            /* Soft-touch homing: decelerate to T_SOFT_STOP_US (8ms) before mechanical stop */
-            int soft_len = total_steps - soft_zone_start;
-            int soft_idx = i - soft_zone_start;
-            int soft_delay = t_cruise + ((T_SOFT_STOP_US - t_cruise) * soft_idx) / (soft_len > 0 ? soft_len : 1);
-            if (soft_delay > delay_us) delay_us = soft_delay;
-        }
-        sleep_us(delay_us);
+        ctx->moving = 0;
+        ctx->pid = 0;
+        save_state(ctx);
+        return 0;
     }
 
-    gpio_deenergize_and_close(pan_fds);
-    gpio_deenergize_and_close(tilt_fds);
+    /* Path 2: User-space fallback with real-time SCHED_FIFO priority */
+    struct sched_param sp;
+    memset(&sp, 0, sizeof(sp));
+    sp.sched_priority = 50;
+    (void)sched_setscheduler(0, SCHED_FIFO, &sp);
 
-    /* Always guarantee coordinates are bounded within [0, span] */
+    int t_start = (t_cruise > T_START_US) ? t_cruise : T_START_US;
+
+    /* Move sequentially (Tilt then Pan) to avoid 5V rail sag */
+    if (d_tilt != 0) {
+        run_userspace_axis(ctx->tilt_pins, &ctx->tilt_phase, &ctx->tilt_pos, &ctx->tilt_slack,
+                           d_tilt, TILT_BACKLASH, 1, t_start, t_cruise, homing_mode);
+    }
+    if (d_pan != 0 && !g_stop_requested) {
+        run_userspace_axis(ctx->pan_pins, &ctx->pan_phase, &ctx->pan_pos, &ctx->pan_slack,
+                           d_pan, PAN_BACKLASH, 0, t_start, t_cruise, homing_mode);
+    }
+
     if (ctx->calibrated) {
         if (ctx->pan_pos < 0) ctx->pan_pos = 0;
         if (ctx->pan_pos > ctx->pan_span) ctx->pan_pos = ctx->pan_span;
@@ -561,8 +682,18 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
     ctx->moving = 0;
     ctx->pid = 0;
     save_state(ctx);
-    save_presets_json(ctx);
     return 0;
+}
+
+static void sync_kernel_pos(int pan_pos, int tilt_pos) {
+    int kfd = open(KERNEL_MOTOR_DEV, O_RDWR);
+    if (kfd >= 0) {
+        struct openipc_motor_set_pos sp;
+        sp.pan_pos = pan_pos;
+        sp.tilt_pos = tilt_pos;
+        (void)ioctl(kfd, OPENIPC_MOTOR_IOC_SET_POS, &sp);
+        close(kfd);
+    }
 }
 
 static int cmd_calibrate(ptz_ctx_t *ctx) {
@@ -572,13 +703,7 @@ static int cmd_calibrate(ptz_ctx_t *ctx) {
 
     /*
      * Sequential Homing to Prevent Brownouts:
-     * Never energize both stepper motors simultaneously during calibration.
-     * Simultaneous dual-motor stall draws ~800mA DC, which combined with
-     * Wi-Fi TX burst and system load can cause 5V rail voltage sag and SoC brownout.
-     *
      * Phase 1A: Soft-homing sweep Tilt to negative mechanical stop alone.
-     * Sweeping 2400 half-steps guarantees reaching the bottom stop from any elevation.
-     * Use 4000 us (~250 steps/s) high-torque speed to overcome internal ribbon cable tension.
      */
     int sweep_tilt = -(ctx->tilt_span + 350); /* -2398 half-steps */
     execute_ramped_move(ctx, 0, sweep_tilt, 4000, 0, 1);
@@ -588,23 +713,25 @@ static int cmd_calibrate(ptz_ctx_t *ctx) {
 
     /*
      * Phase 1B: Soft-homing sweep Pan to negative mechanical stop alone.
-     * Sweeping 4200 half-steps guarantees reaching the left stop from any pan angle.
      */
     int sweep_pan = -(ctx->pan_span + 300);   /* -4200 half-steps */
-    execute_ramped_move(ctx, sweep_pan, 0, T_CRUISE_US, 0, 1);
+    execute_ramped_move(ctx, sweep_pan, 0, 3500, 0, 1);
     if (g_stop_requested) return 1;
     sleep_us(100000);
     if (g_stop_requested) return 1;
 
-    /* At mechanical stop origin, reset coordinates to (0, 0) */
+    /* At mechanical stop origin, reset coordinates to (0, 0) in both kernel and userspace */
     ctx->pan_pos = 0;
     ctx->tilt_pos = 0;
+    ctx->pan_slack = 0;
+    ctx->tilt_slack = 0;
     ctx->calibrated = 1;
+    sync_kernel_pos(0, 0);
     save_state(ctx);
     sleep_us(150000);
     if (g_stop_requested) return 1;
 
-    /* Determine home target (Preset 1 if defined, otherwise center (1000, 200)) */
+    /* Determine home target (Preset 1 if defined, otherwise center (1950, 1024)) */
     int home_pan = ctx->pan_span / 2;
     int home_tilt = ctx->tilt_span / 2;
     if (ctx->presets[0].used && ctx->presets[0].pan >= 0 && ctx->presets[0].tilt >= 0) {
@@ -685,7 +812,6 @@ static int cmd_set_preset(ptz_ctx_t *ctx, const char *id_str, const char *name,
         if (*d) id = atoi(d);
     }
     if (id < 1 || id > MAX_PRESETS) {
-        /* Pick first matching name or first free slot */
         if (name && *name) {
             for (int i = 0; i < MAX_PRESETS; i++) {
                 if (ctx->presets[i].used && strcasecmp(ctx->presets[i].name, name) == 0) {
@@ -837,6 +963,7 @@ int main(int argc, char **argv) {
         if (!ctx.calibrated) {
             return cmd_calibrate(&ctx);
         }
+        sync_kernel_pos(ctx.pan_pos, ctx.tilt_pos);
         ctx.moving = 0;
         ctx.pid = 0;
         save_state(&ctx);
@@ -902,9 +1029,13 @@ int main(int argc, char **argv) {
         pid_t pid = fork();
         if (pid == 0) {
             setsid();
-            close(STDIN_FILENO);
-            close(STDOUT_FILENO);
-            close(STDERR_FILENO);
+            int devnull = open("/dev/null", O_RDWR);
+            if (devnull >= 0) {
+                dup2(devnull, STDIN_FILENO);
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                if (devnull > 2) close(devnull);
+            }
             execute_ramped_move(&ctx, d_pan, d_tilt, cruise_us, 1, 0);
             _exit(0);
         }
