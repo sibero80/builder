@@ -101,6 +101,7 @@ static const int step_seq[8][4] = {
 };
 
 static atomic_t abort_gen = ATOMIC_INIT(0);
+static DEFINE_MUTEX(device_move_lock);
 
 struct motor_axis {
 	struct mutex ioctl_lock;      /* Serializes move submissions per axis */
@@ -111,6 +112,9 @@ struct motor_axis {
 	bool moving;
 	bool stop_requested;
 	bool decel_triggered;
+	u32 decel_start_k;
+	u32 decel_start_step;
+	u32 decel_steps;
 	int phase_idx;                /* Current 0..7 phase state */
 	int logical_pos;              /* Tracked position in half-steps [0..max_pos] */
 	int last_dir;                 /* -1, 0, 1 */
@@ -195,36 +199,40 @@ static void axis_step_once(struct motor_axis *ax, int motor_dir)
  */
 static u64 compute_step_delay_ns(const struct motor_axis *ax)
 {
-	u32 dist_start = (u32)ax->current_step;
-	u32 dist_end = (ax->total_steps > ax->current_step + 1) ?
-		       (u32)(ax->total_steps - 1 - ax->current_step) : 0;
-	u32 k = (dist_start < dist_end) ? dist_start : dist_end;
 	u32 r_steps = (ax->active_ramp_steps > 0) ? (u32)ax->active_ramp_steps : SCURVE_LEN;
 	u32 step_us = (u32)ax->cruise_us;
+	u32 k;
+
+	/* Calibration homing runs at a uniform, gentle pulse rate */
+	if (ax->low_torque)
+		return (u64)ax->cruise_us * 1000ULL;
+
+	if (ax->decel_triggered && ax->decel_steps > 0) {
+		/* Scale down smoothly from exact speed where stop was triggered */
+		u32 step_in_decel = (ax->current_step >= ax->decel_start_step) ?
+				    (ax->current_step - ax->decel_start_step) : 0;
+		if (step_in_decel < ax->decel_steps) {
+			k = (ax->decel_start_k * (ax->decel_steps - step_in_decel)) / ax->decel_steps;
+		} else {
+			k = 0;
+		}
+	} else {
+		u32 dist_start = (u32)ax->current_step;
+		u32 dist_end = (ax->total_steps > ax->current_step + 1) ?
+			       (u32)(ax->total_steps - 1 - ax->current_step) : 0;
+		k = (dist_start < dist_end) ? dist_start : dist_end;
+	}
 
 	if (k < r_steps && ax->start_us > ax->cruise_us) {
 		u32 tbl_idx = (k * (SCURVE_LEN - 1)) / r_steps;
 		u32 pct = stock_scurve_pct[tbl_idx]; /* 10 .. 99 */
 		u32 start_freq = 1000000U / (u32)ax->start_us;
 		u32 cruise_freq = 1000000U / (u32)ax->cruise_us;
-		u32 freq = start_freq + ((cruise_freq - start_freq) * (pct - 10U)) / 90U;
+		/* stock_scurve_pct goes from 10 to 99 (exact span of 89) */
+		u32 freq = start_freq + ((cruise_freq - start_freq) * (pct - 10U)) / 89U;
 
 		if (freq > 0)
 			step_us = 1000000U / freq;
-	}
-
-	/* Soft-touchdown homing: decelerate to 8000 us in the final 15% of calibration sweep */
-	if (ax->low_torque && ax->total_steps > 20) {
-		u32 soft_start = ((u32)ax->total_steps * 85U) / 100U;
-		if (dist_start >= soft_start && ax->cruise_us < 8000) {
-			u32 soft_len = (u32)ax->total_steps - soft_start;
-			u32 soft_idx = dist_start - soft_start;
-			u32 soft_us = (u32)ax->cruise_us +
-				      ((8000U - (u32)ax->cruise_us) * soft_idx) /
-				      (soft_len > 0 ? soft_len : 1U);
-			if (soft_us > step_us)
-				step_us = soft_us;
-		}
 	}
 
 	return (u64)step_us * 1000ULL;
@@ -246,13 +254,23 @@ static enum hrtimer_restart axis_timer_cb(struct hrtimer *timer)
 		return HRTIMER_NORESTART;
 	}
 
-	/* If an abort/stop was requested mid-move, smoothly ramp down over <= 16 half-steps */
+	/* If an abort/stop was requested mid-move, smoothly ramp down from current operating speed */
 	if (ax->stop_requested && !ax->decel_triggered) {
-		int rem = ax->total_steps - ax->current_step;
-		int decel_steps = min(ax->current_step + 1, 16);
+		u32 dist_start = (u32)ax->current_step;
+		u32 dist_end = (ax->total_steps > ax->current_step + 1) ?
+			       (u32)(ax->total_steps - 1 - ax->current_step) : 0;
+		u32 r_steps = (ax->active_ramp_steps > 0) ? (u32)ax->active_ramp_steps : SCURVE_LEN;
+		u32 k_cur = (dist_start < dist_end) ? dist_start : dist_end;
+		if (k_cur > r_steps)
+			k_cur = r_steps;
+
 		ax->decel_triggered = true;
-		if (rem > decel_steps)
-			ax->total_steps = ax->current_step + decel_steps;
+		ax->decel_start_k = k_cur;
+		ax->decel_start_step = ax->current_step;
+		ax->decel_steps = min(k_cur, 32U);
+		if (ax->decel_steps == 0)
+			ax->decel_steps = 1;
+		ax->total_steps = ax->current_step + ax->decel_steps;
 	}
 
 	/* 1. Step the physical motor phase */
@@ -346,13 +364,19 @@ static bool axis_run(struct motor_axis *ax, int steps, int cruise_us,
 	ax->motor_dir = motor_dir;
 	ax->total_steps = abs(steps) + backlash_to_inject;
 	ax->current_step = 0;
-	ax->cruise_us = low_torque ? max(cruise_us, 3500) : clamp(cruise_us, 1000, 20000);
-	ax->start_us = max(ramp_start_us, ax->cruise_us);
+	if (low_torque) {
+		ax->cruise_us = clamp(cruise_us, 4000, 8000);
+		ax->start_us = ax->cruise_us;
+	} else {
+		ax->cruise_us = clamp(cruise_us, 1000, 20000);
+		ax->start_us = max(ramp_start_us, ax->cruise_us);
+	}
 	ax->active_ramp_steps = (ramp_steps > 0) ? ramp_steps : SCURVE_LEN;
 	ax->active_backlash = backlash_steps;
 	ax->low_torque = low_torque;
 	ax->stop_requested = false;
 	ax->decel_triggered = false;
+	ax->decel_steps = 0;
 	ax->moving = true;
 	ax->last_dir = logical_dir;
 
@@ -420,6 +444,13 @@ static long openipc_motor_ioctl(struct file *f, unsigned int cmd, unsigned long 
 		if (m.delay_us == 0)
 			m.delay_us = 2500; /* Default 2.5 ms (400 steps/s) */
 
+		/*
+		 * Global device_move_lock guarantees that Pan and Tilt motors can never
+		 * step concurrently across separate processes or threads, eliminating 5V rail sag.
+		 */
+		if (mutex_lock_interruptible(&device_move_lock))
+			return -ERESTARTSYS;
+
 		start_gen = atomic_read(&abort_gen);
 
 		/* Move sequentially (Tilt then Pan) to prevent 5V rail current sag */
@@ -433,6 +464,7 @@ static long openipc_motor_ioctl(struct file *f, unsigned int cmd, unsigned long 
 				 pan_backlash, pan_max_steps, m.low_torque);
 		}
 
+		mutex_unlock(&device_move_lock);
 		return 0;
 	}
 

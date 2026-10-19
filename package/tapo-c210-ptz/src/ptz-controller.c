@@ -510,11 +510,22 @@ static void stop_active_motion(ptz_ctx_t *ctx) {
         close(kfd);
     }
     if (ctx->pid > 0 && ctx->pid != (int)getpid()) {
-        if (kfd < 0)
-            (void)kill(ctx->pid, SIGTERM);
-        for (int i = 0; i < 30; i++) {
+        /* Wait up to 100ms for child process to exit naturally */
+        for (int i = 0; i < 20; i++) {
             if (kill(ctx->pid, 0) != 0) break;
             sleep_us(5000);
+        }
+        /* If still alive, signal SIGTERM */
+        if (kill(ctx->pid, 0) == 0) {
+            (void)kill(ctx->pid, SIGTERM);
+            for (int i = 0; i < 20; i++) {
+                if (kill(ctx->pid, 0) != 0) break;
+                sleep_us(5000);
+            }
+        }
+        /* Final escalation to guarantee no orphaned process remains */
+        if (kill(ctx->pid, 0) == 0) {
+            (void)kill(ctx->pid, SIGKILL);
         }
     }
     /* Reload updated state after previous process exited */
@@ -640,7 +651,6 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
         ctx->moving = 0;
         ctx->pid = 0;
         save_state(ctx);
-        save_presets_json(ctx);
         return 0;
     }
 
@@ -672,7 +682,6 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
     ctx->moving = 0;
     ctx->pid = 0;
     save_state(ctx);
-    save_presets_json(ctx);
     return 0;
 }
 
