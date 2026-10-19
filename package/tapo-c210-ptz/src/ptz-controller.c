@@ -39,9 +39,9 @@
 
 /* Tapo C210 v2 Hardware Travel & Timing Constants (in half-steps) */
 #define DEFAULT_PAN_SPAN   3900   /* ~343 deg travel */
-#define DEFAULT_TILT_SPAN  1050   /* ~92 deg travel (physical desk to ceiling limits) */
+#define DEFAULT_TILT_SPAN  2048   /* ~114 deg travel (physical desk to ceiling limits matching stock Tapo) */
 #define DEFAULT_PAN_HOME   1950   /* Center */
-#define DEFAULT_TILT_HOME  525    /* Level horizon */
+#define DEFAULT_TILT_HOME  1024   /* Level horizon */
 
 #define T_START_US         12000  /* 12.0 ms (~83 steps/s) high-torque silent start */
 #define T_CRUISE_US        2500   /*  2.5 ms (400 steps/s) ~5.0s full 360 sweep */
@@ -152,13 +152,13 @@ static void init_default_ctx(ptz_ctx_t *ctx) {
     ctx->presets[1].used = 1;
     strcpy(ctx->presets[1].name, "door");
     ctx->presets[1].pan = 2800;
-    ctx->presets[1].tilt = 450;
+    ctx->presets[1].tilt = 900;
 
     ctx->presets[2].id = 3;
     ctx->presets[2].used = 1;
     strcpy(ctx->presets[2].name, "window");
     ctx->presets[2].pan = 800;
-    ctx->presets[2].tilt = 650;
+    ctx->presets[2].tilt = 1200;
 }
 
 static void load_gpio_pins_from_env(ptz_ctx_t *ctx) {
@@ -577,10 +577,11 @@ static int cmd_calibrate(ptz_ctx_t *ctx) {
      * Wi-Fi TX burst and system load can cause 5V rail voltage sag and SoC brownout.
      *
      * Phase 1A: Soft-homing sweep Tilt to negative mechanical stop alone.
-     * Sweeping 1500 half-steps guarantees reaching the bottom stop from any elevation.
+     * Sweeping 2400 half-steps guarantees reaching the bottom stop from any elevation.
+     * Use 4000 us (~250 steps/s) high-torque speed to overcome internal ribbon cable tension.
      */
-    int sweep_tilt = -(ctx->tilt_span + 150); /* -1500 half-steps */
-    execute_ramped_move(ctx, 0, sweep_tilt, T_CRUISE_US, 0, 1);
+    int sweep_tilt = -(ctx->tilt_span + 350); /* -2398 half-steps */
+    execute_ramped_move(ctx, 0, sweep_tilt, 4000, 0, 1);
     if (g_stop_requested) return 1;
     sleep_us(100000);
     if (g_stop_requested) return 1;
