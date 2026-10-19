@@ -39,9 +39,9 @@
 
 /* Tapo C210 v2 Hardware Travel & Timing Constants (in half-steps) */
 #define DEFAULT_PAN_SPAN   3900   /* ~343 deg travel */
-#define DEFAULT_TILT_SPAN  1350   /* ~114 deg travel */
+#define DEFAULT_TILT_SPAN  1050   /* ~92 deg travel (physical desk to ceiling limits) */
 #define DEFAULT_PAN_HOME   1950   /* Center */
-#define DEFAULT_TILT_HOME  675    /* Level horizon */
+#define DEFAULT_TILT_HOME  525    /* Level horizon */
 
 #define T_START_US         12000  /* 12.0 ms (~83 steps/s) high-torque silent start */
 #define T_CRUISE_US        2500   /*  2.5 ms (400 steps/s) ~5.0s full 360 sweep */
@@ -152,13 +152,13 @@ static void init_default_ctx(ptz_ctx_t *ctx) {
     ctx->presets[1].used = 1;
     strcpy(ctx->presets[1].name, "door");
     ctx->presets[1].pan = 2800;
-    ctx->presets[1].tilt = 600;
+    ctx->presets[1].tilt = 450;
 
     ctx->presets[2].id = 3;
     ctx->presets[2].used = 1;
     strcpy(ctx->presets[2].name, "window");
     ctx->presets[2].pan = 800;
-    ctx->presets[2].tilt = 850;
+    ctx->presets[2].tilt = 650;
 }
 
 static void load_gpio_pins_from_env(ptz_ctx_t *ctx) {
@@ -470,6 +470,9 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
 
     int pan_dir = (d_pan > 0) ? 1 : ((d_pan < 0) ? -1 : 0);
     int tilt_dir = (d_tilt > 0) ? 1 : ((d_tilt < 0) ? -1 : 0);
+    /* Invert tilt motor stepping: forward phase (+1) tilts lens DOWN towards desk,
+     * reverse phase (-1) tilts lens UP towards ceiling. */
+    int tilt_motor_dir = -tilt_dir;
 
     int pan_fds[4] = {-1, -1, -1, -1};
     int tilt_fds[4] = {-1, -1, -1, -1};
@@ -507,7 +510,7 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
                 tilt_err += abs_tilt;
                 if (tilt_err >= total_steps) {
                     tilt_err -= total_steps;
-                    ctx->tilt_phase = (ctx->tilt_phase + tilt_dir + 8) & 7;
+                    ctx->tilt_phase = (ctx->tilt_phase + tilt_motor_dir + 8) & 7;
                     gpio_set_phase(tilt_fds, ctx->tilt_phase);
                     ctx->tilt_pos += tilt_dir;
                 }
@@ -528,7 +531,7 @@ static int execute_ramped_move(ptz_ctx_t *ctx, int d_pan, int d_tilt,
         tilt_err += abs_tilt;
         if (tilt_err >= total_steps) {
             tilt_err -= total_steps;
-            ctx->tilt_phase = (ctx->tilt_phase + tilt_dir + 8) & 7;
+            ctx->tilt_phase = (ctx->tilt_phase + tilt_motor_dir + 8) & 7;
             gpio_set_phase(tilt_fds, ctx->tilt_phase);
             ctx->tilt_pos += tilt_dir;
         }
