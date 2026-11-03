@@ -26,10 +26,11 @@ fw_setenv ptz_gpio '44 45 46 47 80 79 76 77'
 fw_setenv ptz_caps 'pan tilt'
 #
 #
-# Set wlan device and sensor
+# Set wlan device, netmode, and sensor
 #
 fw_setenv wlandev ssw101b-ssc333-tapo-c110
 fw_setenv sensor sc3338
+fw_setenv netmode wifi
 #fw_setenv wlanssid Router
 #fw_setenv wlanpass 12345678
 

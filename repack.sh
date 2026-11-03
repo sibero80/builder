@@ -143,8 +143,25 @@ if [ -n "$ssid" ] && [ -n "$pass" ]; then
 #!/bin/sh
 fw_setenv wlanssid "$ssid"
 fw_setenv wlanpass "$pass"
+fw_setenv netmode wifi
 EOF
 	chmod 755 "$file"
+
+	tune="output/squashfs/etc/init.d/S41wifitune"
+	if [ ! -f "$tune" ]; then
+		mkdir -p $(dirname "$tune")
+		cat << 'EOF' > "$tune"
+#!/bin/sh
+case "$1" in
+  start)
+    iwconfig wlan0 power off 2>/dev/null || true
+    ;;
+esac
+exit 0
+EOF
+		chmod 755 "$tune"
+	fi
+
 	rm -f "output/rootfs.$chipset"
 	mksquashfs output/squashfs "output/rootfs.$chipset" -comp xz > /dev/null
 	rm -rf output/squashfs
