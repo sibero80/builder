@@ -42,3 +42,9 @@
 /lib/modules/4.9.84/sigmastar/sensor_sc3336_mipi.ko
 /lib/modules/4.9.84/sigmastar/sensor_sc401ai_mipi.ko
 /usr/share/openipc/sounds/ready_48k.pcm
+/usr/bin/qrscan
+/usr/sbin/qrscan.sh
+/usr/share/openipc/eula/eula.zh-CN.txt
+/usr/share/openipc/eula/eula.ru.txt
+/usr/share/openipc/eula/eula.en.txt
+/usr/share/fonts/truetype/UbuntuMono-Regular.LICENSE
